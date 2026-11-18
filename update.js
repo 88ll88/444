@@ -1,83 +1,77 @@
 const fs = require('fs');
 const https = require('https');
 
-const TARGET_URL = 'https://www.pilio.idv.tw/Live/DrawLiveRead.asp?ltotype=lto539';
 const OUTPUT_FILE = 'sss.js';
-const DURATION_MS = 15 * 60 * 1000; // 持續監聽 15 分鐘（20:31 ~ 20:46）
-const INTERVAL_MS = 4000; // 每 4 秒抓一次
+const DURATION_MS = 20 * 60 * 1000; // 錄製 20 分鐘
+const INTERVAL_MS = 4000; // 每 4 秒抓一次，間隔拉寬一點
 
-// 取得台灣時間字串 (YYYY-MM-DD HH:mm:ss)
+const GAMES = [
+  { name: '今彩539', type: 'lto539' },
+  { name: '大樂透', type: 'ltobig' },
+  { name: '威力彩', type: 'lto' },
+  { name: '3星彩', type: 'lto3' },
+  { name: '4星彩', type: 'lto4' }
+];
+
 function getTaiwanTime() {
   const now = new Date();
   const twTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
   return twTime.toISOString().replace('T', ' ').substring(0, 19);
 }
 
-// 讀取現有的 sss.js 資料
-let records = [];
+let logs = [];
 if (fs.existsSync(OUTPUT_FILE)) {
   try {
     const content = fs.readFileSync(OUTPUT_FILE, 'utf8');
     const match = content.match(/var\s+sss\s*=\s*(\[[\s\S]*?\]);/);
-    if (match) {
-      records = JSON.parse(match[1]);
-    }
+    if (match) logs = JSON.parse(match[1]);
   } catch (e) {
-    records = [];
+    logs = [];
   }
 }
 
-// 寫入 sss.js
-function saveToFile() {
-  const fileContent = `var sss = ${JSON.stringify(records, null, 2)};\n`;
-  fs.writeFileSync(OUTPUT_FILE, fileContent, 'utf8');
+function save() {
+  fs.writeFileSync(OUTPUT_FILE, `var sss = ${JSON.stringify(logs, null, 2)};\n`, 'utf8');
 }
 
-// 抓取即時直播內容
-function fetchLive() {
+function fetchRaw(ltotype) {
+  const url = `https://www.pilio.idv.tw/Live/DrawLiveRead.asp?ltotype=${ltotype}`;
   return new Promise((resolve) => {
-    https.get(TARGET_URL, (res) => {
+    https.get(url, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        // 去除 HTML 標籤與多餘空白，保留純文字與名稱
-        const cleanText = data.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-        resolve(cleanText);
+        const text = data.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+        resolve(text);
       });
     }).on('error', () => resolve(''));
   });
 }
 
-async function startRecording() {
-  const startTime = Date.now();
-  let lastSnapshot = '';
-
-  console.log(`[${getTaiwanTime()}] 開始監聽即時開獎...`);
+async function run() {
+  const start = Date.now();
+  const lastMap = {};
 
   const timer = setInterval(async () => {
-    // 超過 15 分鐘自動結束
-    if (Date.now() - startTime > DURATION_MS) {
+    if (Date.now() - start > DURATION_MS) {
       clearInterval(timer);
-      console.log(`[${getTaiwanTime()}] 監聽結束，共紀錄 ${records.length} 筆資料。`);
       return;
     }
 
-    const currentText = await fetchLive();
-    
-    // 只有當抓到有效文字，且跟上一秒的內容不一樣時（代表有新球掉出或切換彩種），才寫入紀錄
-    if (currentText && currentText !== lastSnapshot) {
-      lastSnapshot = currentText;
-      const timeStr = getTaiwanTime();
-      
-      records.unshift({
-        time: timeStr,
-        raw: currentText
-      });
+    for (const game of GAMES) {
+      const current = await fetchRaw(game.type);
+      if (current && current !== lastMap[game.type]) {
+        lastMap[game.type] = current;
+        
+        // 把抓到的號碼轉成你想要的格式 (例如把逗號隔開的號碼變成 1：xx，2：xx)
+        const balls = current.split(/[\s,]+/).filter(Boolean);
+        const formattedBalls = balls.map((ball, index) => `${index + 1}：${ball}`).join('，');
 
-      saveToFile();
-      console.log(`[${timeStr}] 新增紀錄: ${currentText}`);
+        logs.push(`${getTaiwanTime()} | ${game.name} | ${formattedBalls}`);
+        save();
+      }
     }
   }, INTERVAL_MS);
 }
 
-startRecording();
+run();
