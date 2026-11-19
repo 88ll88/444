@@ -1,10 +1,44 @@
-const str = '<li><FONT color="#990000"><b>今彩539</b></FONT> 第<FONT color=#000000>115279</FONT>期 【2026-11-18】<br/><div class=ball_red>39</div> <div class=ball_red>35</div> <div class=ball_red>22</div> <div class=ball_red>27</div> <div class=ball_red>20</div> <br/></li>';
+const fs = require('fs');
 
-const match = str.match(/今彩539.+2026-11-18(.+\d{2}.+){5}/);
-console.log("比對結果：", match ? "成功" : "失敗");
-if (match) {
-  // 把裡面所有的兩碼數字抓出來
-  const balls = str.match(/<div class=ball_red>(\d{2})<\/div>/g).map(s => s.match(/\d{2}/)[0]);
-  const result = ['2026-11-18', balls];
-  console.log("格式化輸出：", JSON.stringify(result));
-}
+(async () => {
+  try {
+    let vvvContent = fs.readFileSync('vvv.js', 'utf8');
+    const ndateMatch = vvvContent.match(/Ndate\s*=\s*['"](\d{4}-\d{2}-\d{2})['"]/);
+    if (!ndateMatch) process.exit(0);
+    const targetDate = ndateMatch[1];
+
+    // 查詢 Ndate 是否大於今天 (UTC+8)，大於則離開
+    const nowStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
+    if (targetDate > nowStr) process.exit(0);
+
+    const res9800 = await fetch('http://www.9800.com.tw/');
+    const html9800 = await res9800.text();
+    const rowRegex = new RegExp(`今彩539.+${targetDate}(.+\\d{2}.+){5}`);
+    const rowMatch = html9800.match(rowRegex);
+    if (!rowMatch) process.exit(0);
+
+    const ballMatches = rowMatch[0].match(/<div class=ball_red>(\d{2})<\/div>/g);
+    if (!ballMatches || ballMatches.length !== 5) process.exit(0);
+    const balls = ballMatches.map(b => b.match(/\d{2}/)[0]);
+
+    const resPilio = await fetch('https://www.pilio.idv.tw/lto539/list.asp');
+    const htmlPilio = await resPilio.text();
+    const tdayMatch = htmlPilio.match(/var\s+Tday\s*=\s*new\s+Date\("(\d{4})\/(\d{2})\/(\d{2})/);
+    if (!tdayMatch) process.exit(0);
+    const nextDate = `${tdayMatch[1]}-${tdayMatch[2]}-${tdayMatch[3]}`;
+
+    const newEntry = `['${targetDate}',['${balls.join("','")}']]`;
+    const arrayBodyMatch = vvvContent.match(/var\s+vvv\s*=\s*\[\s*([\s\S]*?)\s*\];/);
+    if (!arrayBodyMatch) process.exit(0);
+
+    let oldBody = arrayBodyMatch[1].trim();
+    if (oldBody.includes(`'${targetDate}'`)) process.exit(0);
+
+    const updatedBody = oldBody ? `${newEntry},\n${oldBody}` : newEntry;
+    const finalOutput = `Ndate='${nextDate}';//如Tday\nvar vvv=[\n${updatedBody}\n];\n`;
+
+    fs.writeFileSync('vvv.js', finalOutput, 'utf8');
+  } catch (e) {
+    process.exit(0);
+  }
+})();
